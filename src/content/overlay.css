@@ -1,0 +1,59 @@
+.copy-as-md-overlay-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(1px);
+  z-index: 2147483646;
+  cursor: crosshair;
+}
+
+.copy-as-md-selection {
+  position: fixed;
+  border: 2px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4);
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+.copy-as-md-hint {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  background: rgba(15, 23, 42, 0.85);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  z-index: 2147483648;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.45);
+}
+
+.copy-as-md-toast {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  background: rgba(22, 163, 74, 0.95);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  z-index: 2147483648;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.35);
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.copy-as-md-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.copy-as-md-toast.error {
+  background: rgba(220, 38, 38, 0.95);
+}

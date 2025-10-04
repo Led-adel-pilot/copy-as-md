@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Copy as Markdown",
+  "description": "Capture a portion of the current page and copy the content as Markdown.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Copy page region as Markdown"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "clipboardWrite"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js"
+  }
+}
