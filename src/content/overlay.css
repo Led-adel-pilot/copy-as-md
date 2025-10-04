@@ -7,13 +7,29 @@
   cursor: crosshair;
 }
 
+.copy-as-md-highlight-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+
+.copy-as-md-highlight {
+  position: absolute;
+  background: rgba(74, 222, 128, 0.35);
+  border: 1px solid rgba(34, 197, 94, 0.8);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.4);
+  pointer-events: none;
+}
+
 .copy-as-md-selection {
   position: fixed;
   border: 2px solid #3b82f6;
   background: rgba(59, 130, 246, 0.2);
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.4);
   pointer-events: none;
-  z-index: 2147483647;
+  z-index: 2147483648;
 }
 
 .copy-as-md-hint {
@@ -27,7 +43,7 @@
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
   line-height: 1.4;
-  z-index: 2147483648;
+  z-index: 2147483649;
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.45);
 }
 
@@ -42,7 +58,7 @@
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
   line-height: 1.4;
-  z-index: 2147483648;
+  z-index: 2147483649;
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.35);
   opacity: 0;
   transform: translateY(-8px);

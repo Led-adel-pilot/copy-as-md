@@ -11,6 +11,10 @@
   mask.className = 'copy-as-md-overlay-mask';
   mask.setAttribute(overlayAttr, '');
 
+  const highlightLayer = document.createElement('div');
+  highlightLayer.className = 'copy-as-md-highlight-layer';
+  highlightLayer.setAttribute(overlayAttr, '');
+
   const selectionBox = document.createElement('div');
   selectionBox.className = 'copy-as-md-selection';
   selectionBox.setAttribute(overlayAttr, '');
@@ -21,12 +25,15 @@
   hint.setAttribute(overlayAttr, '');
   hint.textContent = 'Drag to capture an area. Press Esc to cancel.';
 
-  document.body.append(mask, selectionBox, hint);
+  document.body.append(mask, highlightLayer, selectionBox, hint);
 
   let isSelecting = false;
   let startX = 0;
   let startY = 0;
   let currentRect = null;
+  const highlightCache = new Map();
+  let pendingHighlightRect = null;
+  let pendingHighlightFrame = null;
 
   const onMouseDown = (event) => {
     if (event.button !== 0) {
@@ -42,6 +49,7 @@
     currentRect = createRect(startX, startY, startX, startY);
     selectionBox.style.display = 'block';
     updateSelectionBox(currentRect);
+    scheduleHighlightRefresh(currentRect);
 
     window.addEventListener('mousemove', onMouseMove, true);
     window.addEventListener('mouseup', onMouseUp, true);
@@ -56,6 +64,7 @@
 
     currentRect = createRect(startX, startY, event.clientX, event.clientY);
     updateSelectionBox(currentRect);
+    scheduleHighlightRefresh(currentRect);
     event.preventDefault();
     event.stopPropagation();
   };
@@ -70,6 +79,7 @@
 
     isSelecting = false;
     selectionBox.style.display = 'none';
+    clearHighlights();
     mask.style.cursor = 'wait';
 
     if (!currentRect || currentRect.width < 5 || currentRect.height < 5) {
@@ -106,7 +116,9 @@
     window.removeEventListener('mousemove', onMouseMove, true);
     window.removeEventListener('mouseup', onMouseUp, true);
     window.removeEventListener('keydown', onKeyDown, true);
+    clearHighlights();
     mask.remove();
+    highlightLayer.remove();
     selectionBox.remove();
     hint.remove();
   };
@@ -127,26 +139,14 @@
   };
 
   const captureSelection = async (rect) => {
-    const elements = collectElementsInRect(rect);
-    if (!elements.length) {
+    const targets = deriveSelectionTargets(rect);
+    if (!targets.length) {
       throw new Error('No elements found in selection.');
     }
 
-    const selectedSet = new Set(elements);
-    const topLevelElements = elements.filter((el) => {
-      let parent = el.parentElement;
-      while (parent) {
-        if (selectedSet.has(parent)) {
-          return false;
-        }
-        parent = parent.parentElement;
-      }
-      return true;
-    });
-
     const container = document.createElement('div');
-    topLevelElements.forEach((element) => {
-      const clone = element.cloneNode(true);
+    targets.forEach(({ node }) => {
+      const clone = node.cloneNode(true);
       normalizeNode(clone);
       container.appendChild(clone);
     });
@@ -154,7 +154,132 @@
     return htmlToMarkdown(container).trim();
   };
 
-  const collectElementsInRect = (rect) => {
+  const scheduleHighlightRefresh = (rect) => {
+    pendingHighlightRect = rect;
+    if (!rect || rect.width < 2 || rect.height < 2) {
+      clearHighlights();
+      return;
+    }
+
+    if (pendingHighlightFrame) {
+      return;
+    }
+
+    pendingHighlightFrame = requestAnimationFrame(() => {
+      pendingHighlightFrame = null;
+      if (!pendingHighlightRect || pendingHighlightRect.width < 2 || pendingHighlightRect.height < 2) {
+        clearHighlights();
+        return;
+      }
+
+      const targets = deriveSelectionTargets(pendingHighlightRect);
+      reconcileHighlights(targets);
+    });
+  };
+
+  const reconcileHighlights = (targets) => {
+    const seen = new Set();
+
+    targets.forEach(({ node, box }) => {
+      if (!box || box.width === 0 || box.height === 0) {
+        return;
+      }
+
+      let overlay = highlightCache.get(node);
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'copy-as-md-highlight';
+        overlay.setAttribute(overlayAttr, '');
+        highlightLayer.appendChild(overlay);
+        highlightCache.set(node, overlay);
+      }
+
+      overlay.style.left = `${box.left}px`;
+      overlay.style.top = `${box.top}px`;
+      overlay.style.width = `${box.width}px`;
+      overlay.style.height = `${box.height}px`;
+      seen.add(node);
+    });
+
+    for (const [element, overlay] of Array.from(highlightCache.entries())) {
+      if (!seen.has(element)) {
+        overlay.remove();
+        highlightCache.delete(element);
+      }
+    }
+  };
+
+  const clearHighlights = () => {
+    if (pendingHighlightFrame) {
+      cancelAnimationFrame(pendingHighlightFrame);
+      pendingHighlightFrame = null;
+    }
+    pendingHighlightRect = null;
+    highlightCache.forEach((overlay) => overlay.remove());
+    highlightCache.clear();
+  };
+
+  const deriveSelectionTargets = (rect) => {
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return [];
+    }
+
+    const selectionArea = Math.max(rect.width * rect.height, 1);
+    const candidateMetrics = new Map();
+
+    const considerCandidate = (node, box, intersection) => {
+      if (!node || node === document.body || node === document.documentElement) {
+        return;
+      }
+      if (node.hasAttribute && node.hasAttribute(overlayAttr)) {
+        return;
+      }
+
+      const metrics = computeCandidateMetrics(node, rect, selectionArea, box, intersection);
+      if (!metrics) {
+        return;
+      }
+
+      const existing = candidateMetrics.get(node);
+      if (existing) {
+        if ((!existing.accepted && metrics.accepted) || metrics.score > existing.score) {
+          candidateMetrics.set(node, metrics);
+        }
+        return;
+      }
+
+      candidateMetrics.set(node, metrics);
+    };
+
+    const walkerCandidates = collectWalkerCandidates(rect);
+    walkerCandidates.forEach(({ node, box, intersection }) => {
+      considerCandidate(node, box, intersection);
+    });
+
+    const sampledCandidates = sampleElementsInRect(rect);
+    sampledCandidates.forEach((node) => {
+      considerCandidate(node);
+    });
+
+    const metricsList = Array.from(candidateMetrics.values());
+    if (!metricsList.length) {
+      return [];
+    }
+
+    const accepted = metricsList.filter((entry) => entry.accepted);
+    const pool = accepted.length ? accepted : metricsList;
+    const sorted = sortByDocumentOrder(pool);
+    const pruned = pruneCandidates(sorted);
+
+    if (pruned.length) {
+      return pruned.map(({ node, box }) => ({ node, box }));
+    }
+
+    const bestFallback = metricsList.slice().sort((a, b) => b.score - a.score)[0];
+    return bestFallback ? [{ node: bestFallback.node, box: bestFallback.box }] : [];
+  };
+
+  const collectWalkerCandidates = (rect) => {
     const contained = [];
     const partial = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
@@ -180,53 +305,234 @@
       if (node.tagName === 'HTML' || node.tagName === 'BODY') {
         continue;
       }
+
       const style = window.getComputedStyle(node);
       if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) {
         continue;
       }
+
       const box = node.getBoundingClientRect();
       if (!box || !intersects(rect, box)) {
         continue;
       }
+
       const intersection = intersectionRect(rect, box);
       if (!intersection || intersection.width === 0 || intersection.height === 0) {
         continue;
       }
 
-      const tolerance = 4;
+      const tolerance = 2;
       const fullyContained =
         box.left >= rect.left - tolerance &&
         box.right <= rect.right + tolerance &&
         box.top >= rect.top - tolerance &&
         box.bottom <= rect.bottom + tolerance;
 
-      if (fullyContained) {
-        contained.push(node);
+      const targetArray = fullyContained ? contained : partial;
+      targetArray.push({ node, box, intersection });
+    }
+
+    return contained.concat(partial);
+  };
+
+  const sampleElementsInRect = (rect) => {
+    const hits = new Set();
+    const cols = Math.max(3, Math.ceil(rect.width / 250));
+    const rows = Math.max(3, Math.ceil(rect.height / 200));
+
+    const performSampling = () => {
+      for (let row = 0; row < rows; row += 1) {
+        const y = rect.top + ((row + 0.5) / rows) * rect.height;
+        if (y < 0 || y > window.innerHeight) {
+          continue;
+        }
+        for (let col = 0; col < cols; col += 1) {
+          const x = rect.left + ((col + 0.5) / cols) * rect.width;
+          if (x < 0 || x > window.innerWidth) {
+            continue;
+          }
+          const element = document.elementFromPoint(x, y);
+          if (!element) {
+            continue;
+          }
+          const candidate = promoteToBlockCandidate(element, rect);
+          if (candidate) {
+            hits.add(candidate);
+          }
+        }
+      }
+    };
+
+    withOverlaySuspended(performSampling);
+    return Array.from(hits);
+  };
+
+  const promoteToBlockCandidate = (element, rect) => {
+    let current = element;
+    while (current) {
+      if (current.hasAttribute && current.hasAttribute(overlayAttr)) {
+        current = current.parentElement;
         continue;
       }
-
-      const area = Math.max(box.width * box.height, 1);
-      const intersectionArea = intersection.width * intersection.height;
-      const coverageRatio = intersectionArea / area;
-      const horizontalCoverage = intersection.width / Math.max(box.width, 1);
-      const verticalCoverage = intersection.height / Math.max(box.height, 1);
-
-      const MIN_INTERSECTION_RATIO = 0.4;
-      const MIN_AXIS_COVERAGE = 0.4;
-
-      if (coverageRatio >= MIN_INTERSECTION_RATIO &&
-        horizontalCoverage >= MIN_AXIS_COVERAGE &&
-        verticalCoverage >= MIN_AXIS_COVERAGE) {
-        partial.push({ node, score: coverageRatio });
+      if (!(current instanceof Element)) {
+        current = current.parentElement;
+        continue;
       }
+      if (current === document.body || current === document.documentElement) {
+        return null;
+      }
+      const style = window.getComputedStyle(current);
+      if (style.display !== 'inline' && style.display !== 'contents') {
+        const box = current.getBoundingClientRect();
+        if (box && intersects(rect, box)) {
+          return current;
+        }
+      }
+      current = current.parentElement;
+    }
+    return null;
+  };
+
+  const computeCandidateMetrics = (node, rect, selectionArea, precomputedBox, precomputedIntersection) => {
+    const box = precomputedBox || node.getBoundingClientRect();
+    if (!box) {
+      return null;
     }
 
-    if (contained.length) {
-      return contained;
+    const intersection = precomputedIntersection || intersectionRect(rect, box);
+    if (!intersection || intersection.width <= 0 || intersection.height <= 0) {
+      return null;
     }
 
-    partial.sort((a, b) => b.score - a.score);
-    return partial.map((entry) => entry.node);
+    const elementArea = Math.max(box.width * box.height, 1);
+    const intersectionArea = intersection.width * intersection.height;
+    const insideRatio = intersectionArea / elementArea;
+    const selectionFill = intersectionArea / selectionArea;
+    const horizontalCoverage = intersection.width / Math.max(box.width, 1);
+    const verticalCoverage = intersection.height / Math.max(box.height, 1);
+
+    const overflowLeft = Math.max(0, rect.left - box.left);
+    const overflowRight = Math.max(0, box.right - rect.right);
+    const overflowTop = Math.max(0, rect.top - box.top);
+    const overflowBottom = Math.max(0, box.bottom - rect.bottom);
+    const overflowX = (overflowLeft + overflowRight) / Math.max(box.width, 1);
+    const overflowY = (overflowTop + overflowBottom) / Math.max(box.height, 1);
+
+    const overflowLimitX = Math.min(64, rect.width * 0.4);
+    const overflowLimitY = Math.min(64, rect.height * 0.4);
+    const extendsTooFar =
+      overflowLeft > overflowLimitX ||
+      overflowRight > overflowLimitX ||
+      overflowTop > overflowLimitY ||
+      overflowBottom > overflowLimitY;
+
+    const normalizedOverflow = Math.max(overflowX, overflowY);
+    const overflowPenalty = normalizedOverflow > 0.25 ? (normalizedOverflow - 0.25) * 1.8 : 0;
+    const coverageScore = (horizontalCoverage + verticalCoverage) / 2;
+    const score = insideRatio * 0.6 + selectionFill * 0.25 + coverageScore * 0.15 - overflowPenalty;
+
+    const accepted = !(
+      (insideRatio < 0.55 && selectionFill < 0.35) ||
+      horizontalCoverage < 0.55 ||
+      verticalCoverage < 0.55 ||
+      overflowX > 0.45 ||
+      overflowY > 0.45 ||
+      extendsTooFar
+    );
+
+    return {
+      node,
+      box,
+      insideRatio,
+      selectionFill,
+      horizontalCoverage,
+      verticalCoverage,
+      overflowX,
+      overflowY,
+      overflowPenalty,
+      score,
+      accepted
+    };
+  };
+
+  const sortByDocumentOrder = (entries) => {
+    return entries.slice().sort((a, b) => {
+      if (a.node === b.node) {
+        return 0;
+      }
+      const position = a.node.compareDocumentPosition(b.node);
+      if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+        return -1;
+      }
+      if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+        return 1;
+      }
+      return 0;
+    });
+  };
+
+  const pruneCandidates = (candidates) => {
+    const result = [];
+
+    candidates.forEach((candidate) => {
+      let discard = false;
+      for (let i = result.length - 1; i >= 0 && !discard; i -= 1) {
+        const existing = result[i];
+        if (existing.node === candidate.node) {
+          discard = true;
+          break;
+        }
+
+        if (existing.node.contains(candidate.node)) {
+          const preferCandidate =
+            candidate.insideRatio >= existing.insideRatio + 0.2 ||
+            candidate.score >= existing.score * 1.1 ||
+            existing.overflowX + existing.overflowY - (candidate.overflowX + candidate.overflowY) > 0.15;
+          if (preferCandidate) {
+            result.splice(i, 1);
+            continue;
+          }
+          discard = true;
+          break;
+        }
+
+        if (candidate.node.contains(existing.node)) {
+          const preferExisting =
+            existing.insideRatio >= candidate.insideRatio - 0.1 &&
+            existing.score >= candidate.score * 0.9;
+          if (preferExisting) {
+            discard = true;
+            break;
+          }
+          result.splice(i, 1);
+        }
+      }
+
+      if (!discard) {
+        result.push(candidate);
+      }
+    });
+
+    return result;
+  };
+
+  const withOverlaySuspended = (callback) => {
+    const previousMaskPointerEvents = mask.style.pointerEvents;
+    const previousHintPointerEvents = hint.style.pointerEvents;
+    const previousHighlightPointerEvents = highlightLayer.style.pointerEvents;
+    const previousSelectionPointerEvents = selectionBox.style.pointerEvents;
+    mask.style.pointerEvents = 'none';
+    hint.style.pointerEvents = 'none';
+    highlightLayer.style.pointerEvents = 'none';
+    selectionBox.style.pointerEvents = 'none';
+    try {
+      callback();
+    } finally {
+      mask.style.pointerEvents = previousMaskPointerEvents;
+      hint.style.pointerEvents = previousHintPointerEvents;
+      highlightLayer.style.pointerEvents = previousHighlightPointerEvents;
+      selectionBox.style.pointerEvents = previousSelectionPointerEvents;
+    }
   };
 
   const normalizeNode = (root) => {
