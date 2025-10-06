@@ -28,12 +28,131 @@
   document.body.append(mask, highlightLayer, selectionBox, hint);
 
   let isSelecting = false;
-  let startX = 0;
-  let startY = 0;
+  let startPageX = 0;
+  let startPageY = 0;
+  let latestClientX = 0;
+  let latestClientY = 0;
+  let latestPageX = 0;
+  let latestPageY = 0;
   let currentRect = null;
   const highlightCache = new Map();
   let pendingHighlightRect = null;
   let pendingHighlightFrame = null;
+  let autoScrollFrame = null;
+  let scrollVelocityX = 0;
+  let scrollVelocityY = 0;
+
+  const updatePointerFromEvent = (event) => {
+    latestClientX = event.clientX;
+    latestClientY = event.clientY;
+    latestPageX = event.clientX + window.scrollX;
+    latestPageY = event.clientY + window.scrollY;
+  };
+
+  const syncPagePointer = () => {
+    latestPageX = latestClientX + window.scrollX;
+    latestPageY = latestClientY + window.scrollY;
+  };
+
+  const refreshSelection = () => {
+    if (!isSelecting) {
+      return;
+    }
+    currentRect = createRect(startPageX, startPageY, latestPageX, latestPageY);
+    updateSelectionBox(currentRect);
+    scheduleHighlightRefresh(currentRect);
+  };
+
+  const stopAutoScroll = () => {
+    if (autoScrollFrame) {
+      cancelAnimationFrame(autoScrollFrame);
+      autoScrollFrame = null;
+    }
+    scrollVelocityX = 0;
+    scrollVelocityY = 0;
+  };
+
+  const stepAutoScroll = () => {
+    autoScrollFrame = null;
+    if (!isSelecting) {
+      return;
+    }
+
+    const root = document.documentElement;
+    const body = document.body;
+    const maxScrollX = Math.max(0, Math.max(root.scrollWidth, body ? body.scrollWidth : 0) - window.innerWidth);
+    const maxScrollY = Math.max(0, Math.max(root.scrollHeight, body ? body.scrollHeight : 0) - window.innerHeight);
+    const nextScrollX = Math.min(Math.max(window.scrollX + scrollVelocityX, 0), maxScrollX);
+    const nextScrollY = Math.min(Math.max(window.scrollY + scrollVelocityY, 0), maxScrollY);
+
+    const scrolledX = nextScrollX !== window.scrollX;
+    const scrolledY = nextScrollY !== window.scrollY;
+
+    if (scrolledX || scrolledY) {
+      window.scrollTo(nextScrollX, nextScrollY);
+    } else {
+      if ((scrollVelocityX < 0 && window.scrollX === 0) || (scrollVelocityX > 0 && window.scrollX === maxScrollX)) {
+        scrollVelocityX = 0;
+      }
+      if ((scrollVelocityY < 0 && window.scrollY === 0) || (scrollVelocityY > 0 && window.scrollY === maxScrollY)) {
+        scrollVelocityY = 0;
+      }
+    }
+
+    syncPagePointer();
+    refreshSelection();
+
+    if (scrollVelocityX !== 0 || scrollVelocityY !== 0) {
+      autoScrollFrame = requestAnimationFrame(stepAutoScroll);
+    }
+  };
+
+  const updateAutoScroll = () => {
+    if (!isSelecting) {
+      return;
+    }
+
+    const edgeThreshold = 48;
+    const maxStep = 42;
+    const bottomEdge = window.innerHeight - edgeThreshold;
+    const rightEdge = window.innerWidth - edgeThreshold;
+
+    const topIntensity = latestClientY < edgeThreshold ? edgeThreshold - Math.max(latestClientY, 0) : 0;
+    const bottomIntensity = latestClientY > bottomEdge ? Math.min(edgeThreshold, latestClientY - bottomEdge) : 0;
+    const leftIntensity = latestClientX < edgeThreshold ? edgeThreshold - Math.max(latestClientX, 0) : 0;
+    const rightIntensity = latestClientX > rightEdge ? Math.min(edgeThreshold, latestClientX - rightEdge) : 0;
+
+    const toStep = (intensity) => {
+      if (intensity <= 0) {
+        return 0;
+      }
+      return Math.min(maxStep, Math.ceil((intensity / edgeThreshold) * maxStep));
+    };
+
+    if (bottomIntensity > 0) {
+      scrollVelocityY = toStep(bottomIntensity);
+    } else if (topIntensity > 0) {
+      scrollVelocityY = -toStep(topIntensity);
+    } else {
+      scrollVelocityY = 0;
+    }
+
+    if (rightIntensity > 0) {
+      scrollVelocityX = toStep(rightIntensity);
+    } else if (leftIntensity > 0) {
+      scrollVelocityX = -toStep(leftIntensity);
+    } else {
+      scrollVelocityX = 0;
+    }
+
+    if (scrollVelocityX !== 0 || scrollVelocityY !== 0) {
+      if (!autoScrollFrame) {
+        autoScrollFrame = requestAnimationFrame(stepAutoScroll);
+      }
+    } else {
+      stopAutoScroll();
+    }
+  };
 
   const onMouseDown = (event) => {
     if (event.button !== 0) {
@@ -44,12 +163,13 @@
     }
 
     isSelecting = true;
-    startX = event.clientX;
-    startY = event.clientY;
-    currentRect = createRect(startX, startY, startX, startY);
+    stopAutoScroll();
+    updatePointerFromEvent(event);
+    startPageX = latestPageX;
+    startPageY = latestPageY;
     selectionBox.style.display = 'block';
-    updateSelectionBox(currentRect);
-    scheduleHighlightRefresh(currentRect);
+    refreshSelection();
+    updateAutoScroll();
 
     window.addEventListener('mousemove', onMouseMove, true);
     window.addEventListener('mouseup', onMouseUp, true);
@@ -62,9 +182,9 @@
       return;
     }
 
-    currentRect = createRect(startX, startY, event.clientX, event.clientY);
-    updateSelectionBox(currentRect);
-    scheduleHighlightRefresh(currentRect);
+    updatePointerFromEvent(event);
+    refreshSelection();
+    updateAutoScroll();
     event.preventDefault();
     event.stopPropagation();
   };
@@ -74,9 +194,11 @@
       return;
     }
 
+    updatePointerFromEvent(event);
     window.removeEventListener('mousemove', onMouseMove, true);
     window.removeEventListener('mouseup', onMouseUp, true);
 
+    stopAutoScroll();
     isSelecting = false;
     selectionBox.style.display = 'none';
     clearHighlights();
@@ -116,6 +238,7 @@
     window.removeEventListener('mousemove', onMouseMove, true);
     window.removeEventListener('mouseup', onMouseUp, true);
     window.removeEventListener('keydown', onKeyDown, true);
+    stopAutoScroll();
     clearHighlights();
     mask.remove();
     highlightLayer.remove();
@@ -123,12 +246,18 @@
     hint.remove();
   };
 
-  const createRect = (x1, y1, x2, y2) => {
-    const left = Math.min(x1, x2);
-    const top = Math.min(y1, y2);
-    const right = Math.max(x1, x2);
-    const bottom = Math.max(y1, y2);
-    return new DOMRect(left, top, right - left, bottom - top);
+  const createRect = (pageX1, pageY1, pageX2, pageY2) => {
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const leftPage = Math.min(pageX1, pageX2);
+    const topPage = Math.min(pageY1, pageY2);
+    const rightPage = Math.max(pageX1, pageX2);
+    const bottomPage = Math.max(pageY1, pageY2);
+    const left = leftPage - scrollX;
+    const top = topPage - scrollY;
+    const width = rightPage - leftPage;
+    const height = bottomPage - topPage;
+    return new DOMRect(left, top, width, height);
   };
 
   const updateSelectionBox = (rect) => {
