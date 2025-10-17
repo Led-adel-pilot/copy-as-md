@@ -7,6 +7,76 @@
 
   const overlayAttr = 'data-copy-as-md-overlay';
 
+  const defaultOptions = {
+    includeLinks: false,
+    includeMedia: false
+  };
+
+  let cachedOptions = null;
+  let optionsPromise = null;
+
+  const loadOptionsFromStorage = () =>
+    new Promise((resolve) => {
+      if (!chrome.storage || !chrome.storage.sync) {
+        resolve({ ...defaultOptions });
+        return;
+      }
+
+      chrome.storage.sync.get(defaultOptions, (items) => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          console.warn('Copy as Markdown: failed to load options', chrome.runtime.lastError);
+          resolve({ ...defaultOptions });
+          return;
+        }
+        resolve({ ...defaultOptions, ...items });
+      });
+    });
+
+  const refreshOptions = () => {
+    optionsPromise = loadOptionsFromStorage().then((options) => {
+      cachedOptions = options;
+      return options;
+    });
+    return optionsPromise;
+  };
+
+  const getOptions = () => {
+    if (cachedOptions) {
+      return Promise.resolve(cachedOptions);
+    }
+    if (optionsPromise) {
+      return optionsPromise;
+    }
+    return refreshOptions();
+  };
+
+  refreshOptions();
+
+  if (chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'sync') {
+        return;
+      }
+
+      const nextOptions = { ...(cachedOptions || defaultOptions) };
+      let updated = false;
+
+      if (Object.prototype.hasOwnProperty.call(changes, 'includeLinks')) {
+        nextOptions.includeLinks = changes.includeLinks.newValue ?? defaultOptions.includeLinks;
+        updated = true;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(changes, 'includeMedia')) {
+        nextOptions.includeMedia = changes.includeMedia.newValue ?? defaultOptions.includeMedia;
+        updated = true;
+      }
+
+      if (updated) {
+        cachedOptions = nextOptions;
+      }
+    });
+  }
+
   const mask = document.createElement('div');
   mask.className = 'copy-as-md-overlay-mask';
   mask.setAttribute(overlayAttr, '');
@@ -273,6 +343,8 @@
       throw new Error('No elements found in selection.');
     }
 
+    const options = await getOptions();
+
     const container = document.createElement('div');
     targets.forEach(({ node }) => {
       const clone = node.cloneNode(true);
@@ -280,7 +352,7 @@
       container.appendChild(clone);
     });
 
-    return htmlToMarkdown(container).trim();
+    return htmlToMarkdown(container, options).trim();
   };
 
   const scheduleHighlightRefresh = (rect) => {
@@ -746,8 +818,8 @@
     }, 2200);
   };
 
-  const htmlToMarkdown = (root) => {
-    const context = { listDepth: 0, insidePre: false };
+  const htmlToMarkdown = (root, options) => {
+    const context = { listDepth: 0, insidePre: false, options: options || defaultOptions };
     const content = renderChildren(root, context);
     return normalizeMarkdown(content);
   };
@@ -761,6 +833,7 @@
   };
 
   const nodeToMarkdown = (node, context) => {
+    const { options } = context;
     if (node.nodeType === Node.TEXT_NODE) {
       return context.insidePre ? node.textContent : collapseWhitespace(node.textContent);
     }
@@ -822,14 +895,33 @@
       case 'li':
         return renderListItem(node, context);
       case 'a': {
+        if (!options.includeLinks) {
+          return renderInline(node, context);
+        }
         const href = node.getAttribute('href') || '';
         const text = renderInline(node, context) || href;
+        if (!href) {
+          return text;
+        }
         return `[${text}](${href})`;
       }
       case 'img': {
+        if (!options.includeMedia) {
+          return '';
+        }
         const alt = node.getAttribute('alt') || '';
         const src = node.getAttribute('src') || '';
         return `![${alt}](${src})`;
+      }
+      case 'svg': {
+        if (!options.includeMedia) {
+          return '';
+        }
+        const markup = serializeSvg(node);
+        if (!markup) {
+          return '';
+        }
+        return `\n\n${markup}\n\n`;
       }
       case 'hr':
         return '\n---\n\n';
@@ -936,6 +1028,15 @@
       .replace(/\n{3,}/g, '\n\n')
       .replace(/^[\s\n]+|[\s\n]+$/g, '')
       .trim();
+  };
+
+  const serializeSvg = (node) => {
+    try {
+      return new XMLSerializer().serializeToString(node);
+    } catch (error) {
+      console.warn('Copy as Markdown: failed to serialize SVG', error);
+      return '';
+    }
   };
 
   mask.addEventListener('mousedown', onMouseDown, true);

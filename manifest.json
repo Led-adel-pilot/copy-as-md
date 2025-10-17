@@ -9,10 +9,12 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "clipboardWrite"
+    "clipboardWrite",
+    "storage"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background.js"
-  }
+  },
+  "options_page": "src/options/options.html"
 }

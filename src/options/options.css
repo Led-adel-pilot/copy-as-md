@@ -1,0 +1,58 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: Canvas;
+  color: CanvasText;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+}
+
+.options {
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+fieldset {
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+legend {
+  font-weight: 600;
+}
+
+.option-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1rem;
+}
+
+.status {
+  margin: 0;
+  font-size: 0.9rem;
+  color: color-mix(in srgb, CanvasText 60%, transparent);
+}
+
+.status.show {
+  display: block;
+}
+
+[hidden] {
+  display: none !important;
+}
